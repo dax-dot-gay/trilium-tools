@@ -1,0 +1,7 @@
+markdown
+bs4
+pdfkit
+dominate
+markdown-katex
+pymdown-extensions
+MarkdownSuperscript
