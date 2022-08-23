@@ -1,9 +1,9 @@
 import re
+import webbrowser
 import markdown
 import dominate
 from dominate.util import raw
 from dominate.tags import *
-from pdfkit import from_string
 from argparse import ArgumentParser
 import shutil
 import tempfile
@@ -21,9 +21,9 @@ basicConfig(level="DEBUG")
 class TriliumPdfExporter:
     EXCLUDE = ["file"]
 
-    def __init__(self, source: str, target: str) -> None:
+    def __init__(self, source: str, motd: str) -> None:
         self.source: str = source
-        self.target: str = target
+        self.motd: str = motd
         self.md = markdown.Markdown(extensions=["extra", "pymdownx.tilde"])
         self.idmap = {}
 
@@ -101,44 +101,41 @@ class TriliumPdfExporter:
             }
         return out
 
-    def _convert_to_html(self, item: dict, current: str) -> str:
-        content = ""
-        if item["source"]:
-            if item["source"].endswith(".md"):
-                with open(
-                    os.path.join(self.tempdir.name, current, item["source"]), "r"
-                ) as f:
-                    debug(f"Parsing {item['source']}")
-                    raw_md = f.read().replace("\\\\(", "$").replace("\\\\)", "$")
-                    for k in re.findall("~.*?~", raw_md):
-                        raw_md = raw_md.replace(k, "~" + k + "~")
+    def _convert_to_html(self, item: dict, current: str, top: bool = False) -> str:
+        if top:
+            content = div(self.motd, _class="note-content")
+        else:
+            content = ""
+            if item["source"]:
+                if item["source"].endswith(".md"):
+                    with open(
+                        os.path.join(self.tempdir.name, current, item["source"]), "r"
+                    ) as f:
+                        debug(f"Parsing {item['source']}")
+                        raw_md = f.read().replace("\\\\(", "$").replace("\\\\)", "$")
+                        for k in re.findall("~.*?~", raw_md):
+                            raw_md = raw_md.replace(k, "~" + k + "~")
 
-                    content = div(
-                        raw(
-                            self.md.convert(
-                                raw_md,
-                            ).replace("h1", "h5")
-                        ),
-                        _class="note-content",
-                    )
-                    item["content"] = content
-            else:
-                print(
-                    os.path.join(self.tempdir.name, current, item["source"]),
-                    os.path.exists(
-                        os.path.join(self.tempdir.name, current, item["source"])
-                    ),
-                )
-                with open(
-                    os.path.join(self.tempdir.name, current, item["source"]), "rb"
-                ) as f:
-                    item["content"] = "data:{};base64,{}".format(
-                        item["mime"] if item["mime"] else "text/plain",
-                        base64.b64encode(f.read()).decode("utf-8"),
-                    )
-                    self.idmap[
-                        self._pathtuple(os.path.join(current, item["source"]))
-                    ] = item["content"]
+                        content = div(
+                            raw(
+                                self.md.convert(
+                                    raw_md,
+                                ).replace("h1", "h5")
+                            ),
+                            _class="note-content",
+                        )
+                        item["content"] = content
+                else:
+                    with open(
+                        os.path.join(self.tempdir.name, current, item["source"]), "rb"
+                    ) as f:
+                        item["content"] = "data:{};base64,{}".format(
+                            item["mime"] if item["mime"] else "text/plain",
+                            base64.b64encode(f.read()).decode("utf-8"),
+                        )
+                        self.idmap[
+                            self._pathtuple(os.path.join(current, item["source"]))
+                        ] = item["content"]
 
         head = div(
             h2(item["title"]) if item["type"] == "book" else h4(item["title"]),
@@ -192,7 +189,7 @@ class TriliumPdfExporter:
             """
             )
 
-        document += self._convert_to_html(self.meta, "")
+        document += self._convert_to_html(self.meta, "", top=True)
         return document
 
     def _resolve_link(self, path):
@@ -231,38 +228,42 @@ class TriliumPdfExporter:
         self.tempdir = self._extract()
         info("Analyzing export metadata")
         self.meta = self._analyze_metadata()
-        print(self.idmap)
         self.doc = self._generate_html().render()
         self.doc = self._resolve_links()
 
-        with open("out.html", "w") as f:
+        with tempfile.NamedTemporaryFile("r+", suffix=".html") as f:
             f.write(self.doc)
+            f.flush()
+            webbrowser.open(f"file://{f.name}")
+            time.sleep(1)
 
+        info("Cleaning up...")
         self.tempdir.cleanup()
+        if not preserve:
+            os.remove(self.source)
 
 
 if __name__ == "__main__":
     parser = ArgumentParser(
-        description="Parse a compressed MD export of Trilium notes, then convert to a single PDF file"
+        description="Parse a compressed MD export of Trilium notes, then convert to a web page for easy download"
     )
     parser.add_argument(
         "source", metavar="S", type=str, help="Path to source .zip file."
     )
     parser.add_argument(
-        "--output",
-        type=str,
-        required=False,
-        help="Path to pdf file to output. Defaults to trilium_export.pdf",
-        default="trilium_export.pdf",
+        "-p",
+        "--preserve",
+        help="Whether to preserve the source zip file. Defaults to false.",
+        action="store_true",
     )
     parser.add_argument(
-        "--preserve",
-        type=bool,
-        required=False,
-        help="Whether to preserve the source zip file. Defaults to false.",
-        default=False,
+        "-m",
+        "--motd",
+        type=str,
+        help="Message to display under main title",
+        default=None,
     )
 
     args = parser.parse_args()
-    exporter = TriliumPdfExporter(args.source, args.output)
-    exporter.export()
+    exporter = TriliumPdfExporter(args.source, args.motd)
+    exporter.export(preserve=args.preserve)
