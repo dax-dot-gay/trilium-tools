@@ -13,6 +13,7 @@ from logging import *
 import time
 import bs4
 import base64
+from urllib.parse import unquote_plus
 
 basicConfig(level="DEBUG")
 
@@ -24,19 +25,32 @@ class TriliumPdfExporter:
         self.source: str = source
         self.target: str = target
         self.md = markdown.Markdown(extensions=["extra", "pymdownx.tilde"])
+        self.idmap = {}
 
         self.tempdir: str = None
         self.meta = {}
 
     def _extract(self):
         tempdir = tempfile.TemporaryDirectory()
-        shutil.unpack_archive(self.source, str(tempdir))
+        shutil.unpack_archive(self.source, tempdir.name)
         return tempdir
 
-    def _util_parse_meta_children(self, children: list) -> list:
+    def _pathtuple(self, path):
+        fullpath = unquote_plus(path).split(os.sep)
+        pathparts = []
+        while len(fullpath) > 0:
+            pathparts.append(os.sep.join(fullpath))
+            del fullpath[0]
+        return tuple(pathparts)
+
+    def _util_parse_meta_children(self, children: list, current: str) -> list:
         out = []
         for c in children:
             if not c["type"] in self.EXCLUDE:
+                if "dataFileName" in c.keys():
+                    parts = self._pathtuple(os.path.join(current, c["dataFileName"]))
+                    self.idmap[tuple(parts)] = c["noteId"]
+
                 out.append(
                     {
                         "title": c["title"],
@@ -48,7 +62,13 @@ class TriliumPdfExporter:
                         else None,
                         "path": c["dirFileName"] if "dirFileName" in c.keys() else None,
                         "content": None,
-                        "children": self._util_parse_meta_children(c["children"])
+                        "children": self._util_parse_meta_children(
+                            c["children"],
+                            os.path.join(
+                                current,
+                                c["dirFileName"] if "dirFileName" in c.keys() else "",
+                            ),
+                        )
                         if "children" in c.keys()
                         else [],
                     }
@@ -56,16 +76,18 @@ class TriliumPdfExporter:
         return out
 
     def _analyze_metadata(self):
-        if not os.path.exists(os.path.join(str(self.tempdir), "!!!meta.json")):
+        if not os.path.exists(os.path.join(self.tempdir.name, "!!!meta.json")):
             critical("Failed to load: !!!meta.json file missing.")
             exit(0)
 
-        with open(os.path.join(str(self.tempdir), "!!!meta.json"), "r") as f:
+        with open(os.path.join(self.tempdir.name, "!!!meta.json"), "r") as f:
             try:
                 raw = json.load(f)
             except:
                 critical("Failed to load: !!!meta.json is bad JSON")
                 exit(0)
+
+            self.idmap[("",)] = "root"
 
             out = {
                 "title": f"Exported Notes: {time.strftime('%m / %d / %Y')}",
@@ -75,7 +97,7 @@ class TriliumPdfExporter:
                 "source": None,
                 "path": "",
                 "content": None,
-                "children": self._util_parse_meta_children(raw["files"]),
+                "children": self._util_parse_meta_children(raw["files"], ""),
             }
         return out
 
@@ -84,7 +106,7 @@ class TriliumPdfExporter:
         if item["source"]:
             if item["source"].endswith(".md"):
                 with open(
-                    os.path.join(str(self.tempdir), current, item["source"]), "r"
+                    os.path.join(self.tempdir.name, current, item["source"]), "r"
                 ) as f:
                     debug(f"Parsing {item['source']}")
                     raw_md = f.read().replace("\\\\(", "$").replace("\\\\)", "$")
@@ -101,13 +123,22 @@ class TriliumPdfExporter:
                     )
                     item["content"] = content
             else:
+                print(
+                    os.path.join(self.tempdir.name, current, item["source"]),
+                    os.path.exists(
+                        os.path.join(self.tempdir.name, current, item["source"])
+                    ),
+                )
                 with open(
-                    os.path.join(str(self.tempdir), current, item["source"]), "rb"
+                    os.path.join(self.tempdir.name, current, item["source"]), "rb"
                 ) as f:
                     item["content"] = "data:{};base64,{}".format(
                         item["mime"] if item["mime"] else "text/plain",
                         base64.b64encode(f.read()).decode("utf-8"),
                     )
+                    self.idmap[
+                        self._pathtuple(os.path.join(current, item["source"]))
+                    ] = item["content"]
 
         head = div(
             h2(item["title"]) if item["type"] == "book" else h4(item["title"]),
@@ -148,17 +179,62 @@ class TriliumPdfExporter:
                 crossorigin="anonymous",
                 onload="console.log(renderMathInElement(document.body, {delimiters: [{left: '$', right: '$', display: false}]}));",
             )
+            style(
+                """
+                .note-children {
+                    padding-left: 8px;
+                    border-left: 2px solid #dddddd;
+                }
+
+                img {
+                    display: block;
+                }
+            """
+            )
 
         document += self._convert_to_html(self.meta, "")
         return document
+
+    def _resolve_link(self, path):
+        if not re.match("^[a-z]*?://.*", path):
+            path = os.path.join(*[i for i in path.split(os.sep) if not i == ".."])
+            return path
+        else:
+            return path
+
+    def _resolve_links(self):
+        soup = bs4.BeautifulSoup(self.doc, "html.parser")
+        for l in soup.find_all("a"):
+            if re.match("^[a-z]*?://.*", l["href"]):
+                continue
+            lnk = self._resolve_link(unquote_plus(l["href"]))
+            key = self._pathtuple(lnk)
+            l["href"] = "#root"
+            for k in self.idmap.keys():
+                if any([x in k for x in key]):
+                    l["href"] = "#" + self.idmap[k]
+
+        for i in soup.find_all("img"):
+            if re.match("^[a-z]*?://.*", i["src"]):
+                continue
+            lnk = self._resolve_link(unquote_plus(i["src"]))
+            key = self._pathtuple(lnk)
+            i["src"] = ""
+            for k in self.idmap.keys():
+                if any([x in k for x in key]):
+                    i["src"] = self.idmap[k]
+
+        return str(soup)
 
     def export(self, preserve=False) -> str:
         info("Extracting zip file into temporary directory...")
         self.tempdir = self._extract()
         info("Analyzing export metadata")
         self.meta = self._analyze_metadata()
-        debug(json.dumps(self.meta, indent=4))
+        print(self.idmap)
         self.doc = self._generate_html().render()
+        self.doc = self._resolve_links()
+
         with open("out.html", "w") as f:
             f.write(self.doc)
 
