@@ -103,7 +103,7 @@ class TriliumPdfExporter:
 
     def _convert_to_html(self, item: dict, current: str, top: bool = False) -> str:
         if top:
-            content = div(self.motd, _class="note-content")
+            content = div(self.motd if self.motd else "", _class="note-content")
         else:
             content = ""
             if item["source"]:
@@ -145,9 +145,12 @@ class TriliumPdfExporter:
 
         children = div(_class="note-children")
         for c in item["children"]:
-            children += self._convert_to_html(
-                c, os.path.join(current, item["path"] if item["path"] else "")
-            )
+            try:
+                children += self._convert_to_html(
+                    c, os.path.join(current, item["path"] if item["path"] else "")
+                )
+            except ValueError:
+                warning("Experienced tag creation error, skipping")
 
         return div(head, content, children, _class="note")
 
