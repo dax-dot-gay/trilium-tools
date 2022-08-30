@@ -125,6 +125,11 @@ class TriliumPdfExporter:
                             _class="note-content",
                         )
                         item["content"] = content
+                elif item["type"] == "canvas":
+                    with open(os.path.join(self.tempdir.name, current, item["source"]), "r") as f:
+                        debug(f"Parsing canvase {item['source']}")
+                        svg = json.load(f)["svg"]
+                        content = div(raw(svg), _class="note-content note-svg")
                 else:
                     with open(
                         os.path.join(self.tempdir.name, current, item["source"]), "rb"
@@ -188,6 +193,22 @@ class TriliumPdfExporter:
 
                 img {
                     display: block;
+                }
+
+                .note-content.note-svg {
+                    display: block;
+                    width: 90%;
+                    height: auto;
+                    box-sizing: border-box;
+                    padding: 8px;
+                    border: 2px solid #dddddd;
+                    margin-left: 4px;
+                }
+
+                .note-content.note-svg svg {
+                    display: inline-block;
+                    height: auto;
+                    width: 100%;
                 }
             """
             )
