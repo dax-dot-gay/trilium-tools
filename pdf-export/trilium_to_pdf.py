@@ -48,7 +48,8 @@ class TriliumPdfExporter:
         for c in children:
             if not c["type"] in self.EXCLUDE:
                 if "dataFileName" in c.keys():
-                    parts = self._pathtuple(os.path.join(current, c["dataFileName"]))
+                    parts = self._pathtuple(
+                        os.path.join(current, c["dataFileName"]))
                     self.idmap[tuple(parts)] = c["noteId"]
 
                 out.append(
@@ -103,13 +104,15 @@ class TriliumPdfExporter:
 
     def _convert_to_html(self, item: dict, current: str, top: bool = False) -> str:
         if top:
-            content = div(self.motd if self.motd else "", _class="note-content")
+            content = div(self.motd if self.motd else "",
+                          _class="note-content")
         else:
             content = ""
             if item["source"]:
                 if item["source"].endswith(".md"):
                     with open(
-                        os.path.join(self.tempdir.name, current, item["source"]), "r"
+                        os.path.join(self.tempdir.name, current,
+                                     item["source"]), "r"
                     ) as f:
                         debug(f"Parsing {item['source']}")
                         raw_md = f.read().replace("\\\\(", "$").replace("\\\\)", "$")
@@ -129,17 +132,25 @@ class TriliumPdfExporter:
                     with open(os.path.join(self.tempdir.name, current, item["source"]), "r") as f:
                         debug(f"Parsing canvase {item['source']}")
                         svg = json.load(f)["svg"]
-                        content = div(raw(svg), _class="note-content note-svg")
+                        content = div(img(
+                            src=f"data:image/svg+xml;base64,{base64.b64encode(svg.encode('utf-8')).decode('utf-8')}",
+                            _class="svg"
+                        ),
+                            _class="note-content note-svg"
+                        )
+                        item["content"] = content
                 else:
                     with open(
-                        os.path.join(self.tempdir.name, current, item["source"]), "rb"
+                        os.path.join(self.tempdir.name, current,
+                                     item["source"]), "rb"
                     ) as f:
                         item["content"] = "data:{};base64,{}".format(
                             item["mime"] if item["mime"] else "text/plain",
                             base64.b64encode(f.read()).decode("utf-8"),
                         )
                         self.idmap[
-                            self._pathtuple(os.path.join(current, item["source"]))
+                            self._pathtuple(os.path.join(
+                                current, item["source"]))
                         ] = item["content"]
 
         head = div(
@@ -152,7 +163,8 @@ class TriliumPdfExporter:
         for c in item["children"]:
             try:
                 children += self._convert_to_html(
-                    c, os.path.join(current, item["path"] if item["path"] else "")
+                    c, os.path.join(
+                        current, item["path"] if item["path"] else "")
                 )
             except ValueError:
                 warning("Experienced tag creation error, skipping")
@@ -203,9 +215,10 @@ class TriliumPdfExporter:
                     padding: 8px;
                     border: 2px solid #dddddd;
                     margin-left: 4px;
+                    background-color: white;
                 }
 
-                .note-content.note-svg svg {
+                .note-content.note-svg img {
                     display: inline-block;
                     height: auto;
                     width: 100%;
@@ -218,7 +231,8 @@ class TriliumPdfExporter:
 
     def _resolve_link(self, path):
         if not re.match("^[a-z]*?://.*", path):
-            path = os.path.join(*[i for i in path.split(os.sep) if not i == ".."])
+            path = os.path.join(
+                *[i for i in path.split(os.sep) if not i == ".."])
             return path
         else:
             return path
@@ -236,7 +250,7 @@ class TriliumPdfExporter:
                     l["href"] = "#" + self.idmap[k]
 
         for i in soup.find_all("img"):
-            if re.match("^[a-z]*?://.*", i["src"]):
+            if re.match("^[a-z]*?://.*", i["src"]) or i["src"].startswith("data:"):
                 continue
             lnk = self._resolve_link(unquote_plus(i["src"]))
             key = self._pathtuple(lnk)
